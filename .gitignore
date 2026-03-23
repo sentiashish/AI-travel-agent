@@ -1,0 +1,15 @@
+.env
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache / artifacts
+__pycache__/
+*.py[cod]
+.Python
+.pytest_cache/
+
+# Local logs / outputs
+agent_reasoning_log.json
