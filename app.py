@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
 
 import streamlit as st
@@ -532,11 +532,6 @@ with st.sidebar:
     except ValueError:
         start_default = date.today()
 
-    try:
-        end_default = date.fromisoformat(active_dates.get("end", date.today().isoformat()))
-    except ValueError:
-        end_default = date.today()
-
     traveler_name = st.text_input(
         "Traveler / Group Name",
         value=str(active_preferences.get("traveler_name", "Team Alpha")),
@@ -587,8 +582,10 @@ with st.sidebar:
     col_date_1, col_date_2 = st.columns(2)
     with col_date_1:
         start_date = st.date_input("Start", value=start_default)
+
+    auto_end_date = start_date + timedelta(days=max(int(days), 1) - 1)
     with col_date_2:
-        end_date = st.date_input("End", value=end_default)
+        st.text_input("End (auto)", value=auto_end_date.isoformat(), disabled=True)
 
     interests = st.text_area(
         "Interests",
@@ -644,7 +641,7 @@ with st.sidebar:
         "budget_category": style,
         "travel_dates": {
             "start": start_date.isoformat(),
-            "end": end_date.isoformat(),
+            "end": auto_end_date.isoformat(),
         },
         "interests": interests_list,
         "dietary_preferences": dietary_preferences,

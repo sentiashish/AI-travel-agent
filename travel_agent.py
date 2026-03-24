@@ -827,6 +827,13 @@ def apply_preferences_overrides(
         dates = {}
     start = str(dates.get("start", "")).strip()
     end = str(dates.get("end", "")).strip()
+    try:
+        start_date = datetime.date.fromisoformat(start)
+        end_date = start_date + datetime.timedelta(days=merged["trip_duration_days"] - 1)
+        end = end_date.isoformat()
+    except Exception:
+        # Keep provided end date if start date is not parseable.
+        pass
     merged["travel_dates"] = {
         "start": start,
         "end": end,
