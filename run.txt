@@ -1,4 +1,25 @@
-cd '/c/Users/Ashvatth/OneDrive/Desktop/AshWorks/test/ai-ia-sem6'
+cd "c:\Users\ASHISH KUMAR\OneDrive\Documents\Desktop\KJSCE\kj stuff\TY Full Syllabus\AI Lab CA-1\ai-ia-sem6"
+
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# Required for travel_agent.py and app.py
+$env:OPENROUTER_API_KEY="your_openrouter_api_key_here"
+
+# Frontend (recommended)
+python -m streamlit run app.py
+
+# One-shot CLI run
+python travel_agent.py --query "Plan a 5-day trip to Goa for 3 friends under INR 50000"
+
+# CLI run from JSON preferences
+python travel_agent.py --preferences sample_preferences.json
+
+# Interactive CLI mode
+python travel_agent.py --interactive
+
+# Simple demo agent (no OpenRouter key required)
+python alternative_simple_agent.py

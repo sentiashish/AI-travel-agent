@@ -1,6 +1,10 @@
+import argparse
 import os
 import json
 import datetime
+import re
+from pathlib import Path
+from typing import Any, Dict
 from dotenv import load_dotenv
 from langchain_community.chat_models import ChatOpenAI
 from langchain.agents import create_react_agent
@@ -8,31 +12,309 @@ from langchain.agents.agent import AgentExecutor
 from langchain_core.prompts import PromptTemplate
 from langchain.tools import Tool, tool
 from langchain_community.tools import DuckDuckGoSearchRun
-search = DuckDuckGoSearchRun(region="in-en")
-from langchain.memory import ConversationBufferMemory
+
+# Resolve project files relative to this script so commands work from any cwd.
+BASE_DIR = Path(__file__).resolve().parent
+RUN_HISTORY_FILE = BASE_DIR / "agent_run_history.jsonl"
 
 # If using OpenRouter (free API)
-# Set your API key in .env file or directly here
-load_dotenv()
+# Set your API key in .env file or directly in environment variables.
+load_dotenv(BASE_DIR / ".env")
+
+OUTPUT_POLISH_PROMPT = """You are a senior travel consultant editor.
+Rewrite the draft travel plan into a polished, human-quality, professional deliverable.
+
+Rules:
+- Keep facts from the draft; do not invent prices/events unless clearly labeled as estimate.
+- Use clear, concise, high-trust language (not robotic, not overly dramatic).
+- Use an executive tone suitable for a premium travel advisory report.
+- Keep all currency in INR where possible.
+- If details are missing, add practical assumptions as a short bullet list.
+- Use compact bullets and short paragraphs. Do not write long prose blocks.
+- Under Budget Breakdown, include a markdown table with columns: Category, Estimated Cost (INR), Notes.
+- Under Day-by-Day Itinerary, use Day 1/Day 2 style subheadings with Morning/Afternoon/Evening bullets.
+- Under Quick Booking Checklist, include exactly 8 checklist items using markdown task list format.
+- Ensure this exact output structure with markdown headings:
+
+## Trip Snapshot
+## Day-by-Day Itinerary
+## Budget Breakdown
+## Stay and Transport Options
+## Food and Local Experiences
+## Safety and Practical Tips
+## Quick Booking Checklist
+
+Each section must be present. Keep the output actionable and easy to scan.
+
+User request:
+{query}
+
+Draft plan:
+{draft}
+"""
+
+REQUIRED_OUTPUT_SECTIONS = [
+    "## Trip Snapshot",
+    "## Day-by-Day Itinerary",
+    "## Budget Breakdown",
+    "## Stay and Transport Options",
+    "## Food and Local Experiences",
+    "## Safety and Practical Tips",
+    "## Quick Booking Checklist",
+]
+
+
+def _extract_trip_fields(query: str) -> Dict[str, Any]:
+    """Best-effort parser for key trip fields from natural language query."""
+    text = query or ""
+
+    days_match = re.search(r"(\d+)\s*-?\s*day", text, flags=re.IGNORECASE)
+    days = int(days_match.group(1)) if days_match else 5
+
+    travelers_match = re.search(r"for\s+(\d+)\s+(?:travelers?|friends?|people)", text, flags=re.IGNORECASE)
+    travelers = int(travelers_match.group(1)) if travelers_match else 2
+
+    budget_match = re.search(r"INR\s*([\d,]+)", text, flags=re.IGNORECASE)
+    budget = int(budget_match.group(1).replace(",", "")) if budget_match else 30000
+
+    destination = "Your Destination"
+    destination_match = re.search(
+        r"trip\s+to\s+(.+?)\s+for\s+\d+\s+(?:travelers?|friends?|people)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not destination_match:
+        destination_match = re.search(r"trip\s+to\s+(.+?)(?:[\.,]|$)", text, flags=re.IGNORECASE)
+    if destination_match:
+        destination = destination_match.group(1).strip()
+
+    interests_text = "sightseeing, local food, culture"
+    interests_match = re.search(r"Interests:\s*(.+?)\.", text, flags=re.IGNORECASE)
+    if interests_match:
+        interests_text = interests_match.group(1).strip()
+    interests = [i.strip() for i in interests_text.split(",") if i.strip()]
+    if not interests:
+        interests = ["sightseeing", "local food", "culture"]
+
+    return {
+        "destination": destination,
+        "days": max(days, 1),
+        "travelers": max(travelers, 1),
+        "budget": max(budget, 1000),
+        "interests": interests,
+    }
+
+
+def build_offline_fallback_plan(query: str, reason: str = "") -> str:
+    """Generate a useful markdown travel plan without requiring LLM/API access."""
+    fields = _extract_trip_fields(query)
+    destination = fields["destination"]
+    days = fields["days"]
+    travelers = fields["travelers"]
+    budget = fields["budget"]
+    interests = fields["interests"]
+
+    accommodation = int(budget * 0.35)
+    food = int(budget * 0.25)
+    transport = int(budget * 0.15)
+    activities = int(budget * 0.20)
+    contingency = max(budget - (accommodation + food + transport + activities), 0)
+    per_person = budget / max(travelers, 1)
+
+    day_blocks = []
+    for i in range(1, days + 1):
+        focus = interests[(i - 1) % len(interests)]
+        day_blocks.append(
+            f"### Day {i}\n"
+            f"- Morning: Visit a top-rated {focus} spot in {destination}; start early to avoid crowds.\n"
+            f"- Afternoon: Explore nearby landmarks and local markets; keep 1-2 backup places.\n"
+            f"- Evening: Try a well-reviewed local restaurant and a short leisure walk in a safe area."
+        )
+
+    assumptions = "\n".join([
+        "- This fallback plan is generated without live LLM/API calls.",
+        "- Costs are estimates and should be verified during booking.",
+        "- Attraction timings and ticket prices may vary by season.",
+    ])
+
+    offline_note = ""
+    if reason:
+        offline_note = f"\n- Runtime note: {reason}\n"
+
+    return f"""
+## Trip Snapshot
+- Destination: {destination}
+- Duration: {days} days
+- Travelers: {travelers}
+- Budget: INR {budget:,}
+- Focus: {", ".join(interests[:5])}
+{offline_note}
+### Practical Assumptions
+{assumptions}
+
+## Day-by-Day Itinerary
+{chr(10).join(day_blocks)}
+
+## Budget Breakdown
+| Category | Estimated Cost (INR) | Notes |
+|---|---:|---|
+| Accommodation | {accommodation:,} | Mid-range hotel/hostel split |
+| Food & Dining | {food:,} | Local meals + one special meal/day |
+| Transport | {transport:,} | Local commute, airport/station transfers |
+| Activities | {activities:,} | Tickets, experiences, entry fees |
+| Contingency | {contingency:,} | Buffer for surge pricing/emergencies |
+| Total | {budget:,} | Approximate total budget |
+
+- Estimated per person: INR {per_person:,.0f}
+
+## Stay and Transport Options
+- Stay near central areas with high review counts and good public transport access.
+- For budget travel: hostels/guesthouses; for comfort: 3-star hotels with breakfast.
+- Use app-based cabs during late hours and keep offline maps downloaded.
+
+## Food and Local Experiences
+- Prioritize highly rated local eateries during lunch (less rush than dinner).
+- Try region-specific dishes and one guided local food walk if available.
+- Keep hydration, hygiene, and dietary preferences in mind.
+
+## Safety and Practical Tips
+- Keep digital + physical copies of IDs and booking confirmations.
+- Avoid isolated routes late at night; use verified transport apps.
+- Carry essential medicines, sunscreen, and a power bank.
+
+## Quick Booking Checklist
+- [ ] Book flights/train tickets
+- [ ] Reserve accommodation in preferred area
+- [ ] Create day-wise map pins for key places
+- [ ] Pre-book top activity/experience slots
+- [ ] Plan airport/station transfer
+- [ ] Set daily spending cap
+- [ ] Save emergency contacts and offline maps
+- [ ] Keep backup payment method
+""".strip()
+
+
+def _extract_step_trace(result: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Convert LangChain intermediate steps into JSON-serializable records."""
+    steps: list[Dict[str, Any]] = []
+    for idx, step in enumerate(result.get("intermediate_steps", []), start=1):
+        try:
+            action, observation = step
+            steps.append(
+                {
+                    "step": idx,
+                    "tool": getattr(action, "tool", "unknown"),
+                    "tool_input": str(getattr(action, "tool_input", ""))[:1200],
+                    "observation": str(observation)[:2000],
+                }
+            )
+        except Exception:
+            continue
+    return steps
+
+
+def persist_run_log(
+    query: str,
+    result: Dict[str, Any],
+    show_steps: bool,
+    should_polish: bool,
+    error: str = "",
+) -> None:
+    """Append a single run record to local JSONL history for traceability."""
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "query": query,
+        "show_steps": show_steps,
+        "should_polish": should_polish,
+        "fallback_mode": bool(result.get("fallback_mode", False)),
+        "error": error,
+        "output_preview": str(result.get("output", ""))[:1200],
+        "raw_output_preview": str(result.get("raw_output", ""))[:1200],
+        "steps_count": len(result.get("intermediate_steps", [])),
+    }
+
+    if show_steps and "intermediate_steps" in result:
+        record["steps"] = _extract_step_trace(result)
+
+    RUN_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(RUN_HISTORY_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 # ============================================================
 # SECTION 1: LLM SETUP (Using OpenRouter - Free API)
 # ============================================================
 
-def setup_llm():
+def setup_llm() -> ChatOpenAI:
     """
     Setup LLM using OpenRouter's free API.
     OpenRouter provides free access to models like
     meta-llama/llama-3-8b-instruct (free tier).
     """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Missing OPENROUTER_API_KEY. Add it to your environment or .env file."
+        )
+
     llm = ChatOpenAI(
-        model="meta-llama/llama-3-8b-instruct",  # Free model
-        openai_api_key=os.getenv("OPENROUTER_API_KEY", "your-key-here"),
+        model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-8b-instruct"),
+        openai_api_key=api_key,
         openai_api_base="https://openrouter.ai/api/v1",
-        temperature=0.7,
-        max_tokens=2000
+        temperature=float(os.getenv("TRAVEL_AGENT_TEMPERATURE", "0.3")),
+        max_tokens=int(os.getenv("TRAVEL_AGENT_MAX_TOKENS", "1800"))
     )
     return llm
+
+
+def extract_final_answer(raw_output: str) -> str:
+    """Extract only the final user-facing answer from agent output."""
+    text = (raw_output or "").strip()
+    if "Final Answer:" in text:
+        text = text.split("Final Answer:", 1)[1].strip()
+    return text
+
+
+def normalize_output_layout(text: str) -> str:
+    """Ensure output always includes required headings and clean spacing."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        cleaned = "Travel plan could not be generated from available details."
+
+    # Normalize heading depth to level-2 for consistency.
+    cleaned = re.sub(r"^###\s+", "## ", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^#\s+", "## ", cleaned, flags=re.MULTILINE)
+
+    lower_text = cleaned.lower()
+    missing_sections = [
+        section for section in REQUIRED_OUTPUT_SECTIONS
+        if section.lower() not in lower_text
+    ]
+
+    if missing_sections:
+        for section in missing_sections:
+            cleaned += (
+                "\n\n"
+                f"{section}\n"
+                "- Details not available from current sources; verify during booking."
+            )
+
+    # Collapse 3+ newlines into max 2 for cleaner visual density.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def polish_output(query: str, draft: str) -> str:
+    """Polish draft output into a structured high-quality travel report."""
+    try:
+        llm = setup_llm()
+        prompt = OUTPUT_POLISH_PROMPT.format(query=query, draft=draft)
+        response = llm.invoke(prompt)
+        content = getattr(response, "content", "")
+        polished = content.strip() if content else draft
+        return normalize_output_layout(polished)
+    except Exception:
+        # Never fail user response due to polishing step.
+        return normalize_output_layout(draft)
 
 
 # ============================================================
@@ -40,7 +322,7 @@ def setup_llm():
 # ============================================================
 
 # --- Tool 1: Web Search Tool ---
-search = DuckDuckGoSearchRun()
+search = DuckDuckGoSearchRun(region="in-en")
 
 search_tool = Tool(
     name="WebSearch",
@@ -54,6 +336,26 @@ search_tool = Tool(
 )
 
 # --- Tool 2: Budget Calculator Tool ---
+def _parse_budget_query(query: str) -> Dict[str, float]:
+    """Parse budget tool input from JSON or key=value text."""
+    query = query.strip()
+    if not query:
+        raise ValueError("Empty input")
+
+    # Accept structured JSON input for higher reliability in tool calls.
+    if query.startswith("{"):
+        raw = json.loads(query)
+        return {k: float(v) for k, v in raw.items()}
+
+    params: Dict[str, float] = {}
+    for key, value in re.findall(r"([a-zA-Z_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+)", query):
+        params[key.strip()] = float(value)
+
+    if not params:
+        raise ValueError("No key=value parameters found")
+    return params
+
+
 @tool
 def budget_calculator(query: str) -> str:
     """
@@ -63,11 +365,7 @@ def budget_calculator(query: str) -> str:
     Returns detailed budget breakdown.
     """
     try:
-        # Parse the input
-        params = {}
-        for part in query.split(","):
-            key, value = part.strip().split("=")
-            params[key.strip()] = float(value.strip())
+        params = _parse_budget_query(query)
 
         days = int(params.get("days", 1))
         hotel = params.get("hotel_per_day", 0)
@@ -103,7 +401,11 @@ def budget_calculator(query: str) -> str:
         return result
 
     except Exception as e:
-        return f"Error calculating budget. Please use format: 'days=N, hotel_per_day=N, food_per_day=N, transport_per_day=N, activities_per_day=N, num_people=N'. Error: {str(e)}"
+        return (
+            "Error calculating budget. Use JSON or format: "
+            "'days=N, hotel_per_day=N, food_per_day=N, transport_per_day=N, "
+            f"activities_per_day=N, num_people=N'. Error: {str(e)}"
+        )
 
 
 # --- Tool 3: File Reader Tool (Reads user preferences from JSON) ---
@@ -115,18 +417,21 @@ def read_preferences(file_path: str) -> str:
     Returns the contents of the preference file.
     """
     try:
-        if file_path.endswith('.json'):
-            with open(file_path, 'r') as f:
+        input_path = Path(file_path).expanduser()
+        path = input_path if input_path.is_absolute() else (BASE_DIR / input_path)
+        path = path.resolve()
+        if path.suffix.lower() == '.json':
+            with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             return json.dumps(data, indent=2)
-        elif file_path.endswith('.csv'):
+        elif path.suffix.lower() == '.csv':
             import csv
-            with open(file_path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 rows = list(reader)
             return json.dumps(rows, indent=2)
         else:
-            with open(file_path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 return f.read()
     except FileNotFoundError:
         return f"File '{file_path}' not found. Please provide a valid file path."
@@ -159,6 +464,9 @@ def generate_itinerary(plan_json: str) -> str:
         plan = json.loads(plan_json)
         destination = plan.get("destination", "Unknown")
         days = plan.get("days", [])
+
+        if not isinstance(days, list):
+            return "Error: 'days' should be a list in the itinerary JSON."
 
         itinerary = f"""
 🌍 TRAVEL ITINERARY: {destination.upper()}
@@ -224,6 +532,9 @@ Final Answer: the final answer to the original input question
 - Include local food recommendations
 - Add practical travel tips
 - Be specific with timings and locations
+- In Final Answer, use professional markdown headings and actionable bullets
+- Include a day-by-day plan and clear budget split
+- Avoid generic filler; prioritize concrete recommendations
 
 Begin!
 
@@ -235,8 +546,8 @@ Thought: {agent_scratchpad}"""
 # SECTION 4: AGENT CREATION AND EXECUTION
 # ============================================================
 
-def create_travel_agent():
-    """Creates and returns the Travel Planning Agent."""
+def create_travel_agent(verbose: bool = False, return_steps: bool = False) -> AgentExecutor:
+    """Create and configure the Travel Planning Agent executor."""
 
     # Setup LLM
     llm = setup_llm()
@@ -257,27 +568,59 @@ def create_travel_agent():
         prompt=prompt
     )
 
-    # Create agent executor with memory
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True
-    )
-
     agent_executor = AgentExecutor(
         agent=agent,
         tools=tools,
-        memory=memory,
-        verbose=True,           # Shows reasoning traces/logs
+        verbose=verbose,
         handle_parsing_errors=True,
-        max_iterations=10,
-        return_intermediate_steps=True  # Returns agent logs
+        max_iterations=int(os.getenv("TRAVEL_AGENT_MAX_ITERATIONS", "8")),
+        return_intermediate_steps=return_steps
     )
 
     return agent_executor
 
 
-def run_travel_agent():
-    """Main function to run the Travel Planning Agent."""
+def execute_query(
+    query: str,
+    verbose: bool = False,
+    show_steps: bool = False,
+    should_polish: bool = True
+) -> Dict[str, Any]:
+    """Execute one planning query and return raw agent response."""
+    try:
+        agent = create_travel_agent(verbose=verbose, return_steps=show_steps)
+        result = agent.invoke({"input": query})
+
+        raw_output = extract_final_answer(str(result.get("output", "")))
+        final_output = polish_output(query, raw_output) if should_polish else raw_output
+        result["raw_output"] = raw_output
+        result["output"] = final_output
+        persist_run_log(query, result, show_steps, should_polish)
+        return result
+    except RuntimeError as exc:
+        if "OPENROUTER_API_KEY" in str(exc):
+            fallback = normalize_output_layout(build_offline_fallback_plan(query, str(exc)))
+            result = {
+                "output": fallback,
+                "raw_output": fallback,
+                "fallback_mode": True,
+            }
+            persist_run_log(query, result, show_steps, should_polish, error=str(exc))
+            return result
+        raise
+    except Exception as exc:
+        persist_run_log(
+            query,
+            {"output": "", "raw_output": "", "fallback_mode": False},
+            show_steps,
+            should_polish,
+            error=str(exc),
+        )
+        raise
+
+
+def run_travel_agent(user_query: str, show_steps: bool = False, should_polish: bool = True) -> None:
+    """Run a single travel planning request from the CLI."""
 
     print("=" * 60)
     print("🌍  TRAVEL PLANNING AGENT  🌍")
@@ -287,25 +630,17 @@ def run_travel_agent():
     print("budget calculations, and local recommendations.")
     print("=" * 60)
 
-    agent = create_travel_agent()
-
-    # Example query - modify as needed
-    user_query = """
-    Plan a 5-day trip to Goa, India for 3 friends.
-    Budget: ₹50,000 total (moderate budget).
-    Interests: beaches, water sports, nightlife, 
-    local cuisine, historical sites.
-    Travel dates: December 2025.
-    We want a mix of adventure and relaxation.
-    """
-
     print(f"\n📝 User Request: {user_query}")
     print("=" * 60)
     print("🤖 Agent is thinking...\n")
 
     try:
-        # Run the agent
-        result = agent.invoke({"input": user_query})
+        result = execute_query(
+            user_query,
+            verbose=show_steps,
+            show_steps=show_steps,
+            should_polish=should_polish
+        )
 
         # Print final output
         print("\n" + "=" * 60)
@@ -314,7 +649,7 @@ def run_travel_agent():
         print(result["output"])
 
         # Print agent reasoning logs
-        if "intermediate_steps" in result:
+        if show_steps and "intermediate_steps" in result:
             print("\n" + "=" * 60)
             print("📋 AGENT REASONING LOG")
             print("=" * 60)
@@ -330,14 +665,40 @@ def run_travel_agent():
         print("Tip: Make sure your API key is set correctly.")
 
 
+def build_query_from_preferences(file_path: str) -> str:
+    """Build a deterministic natural language query from a JSON preferences file."""
+    input_path = Path(file_path).expanduser()
+    resolved = input_path if input_path.is_absolute() else (BASE_DIR / input_path)
+
+    with open(resolved.resolve(), "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    destination = data.get("destination", "Unknown destination")
+    days = data.get("trip_duration_days", "unspecified duration")
+    num_travelers = data.get("num_travelers", "unspecified group size")
+    budget = data.get("budget_total_inr", "unspecified budget")
+    budget_category = data.get("budget_category", "unspecified")
+    interests = ", ".join(data.get("interests", [])) or "general sightseeing"
+    travel_dates = data.get("travel_dates", {})
+    start = travel_dates.get("start", "")
+    end = travel_dates.get("end", "")
+    dates_text = f"from {start} to {end}" if start and end else "dates flexible"
+
+    return (
+        f"Plan a {days}-day trip to {destination} for {num_travelers} travelers. "
+        f"Total budget is INR {budget} ({budget_category}). "
+        f"Interests: {interests}. Travel window: {dates_text}. "
+        "Provide a day-by-day itinerary, budget split, food recommendations, "
+        "local transport guidance, and safety tips."
+    )
+
+
 # ============================================================
 # SECTION 5: INTERACTIVE MODE
 # ============================================================
 
-def interactive_mode():
+def interactive_mode(show_steps: bool = False, should_polish: bool = True):
     """Run the agent in interactive chat mode."""
-
-    agent = create_travel_agent()
 
     print("=" * 60)
     print("🌍  TRAVEL PLANNING AGENT - Interactive Mode  🌍")
@@ -357,8 +718,15 @@ def interactive_mode():
             continue
 
         try:
-            result = agent.invoke({"input": user_input})
+            result = execute_query(
+                user_input,
+                verbose=show_steps,
+                show_steps=show_steps,
+                should_polish=should_polish
+            )
             print(f"\n🤖 Agent: {result['output']}")
+            if show_steps and "intermediate_steps" in result:
+                print(f"\n🔎 Steps captured: {len(result['intermediate_steps'])}")
         except Exception as e:
             print(f"Error: {str(e)}")
 
@@ -368,9 +736,25 @@ def interactive_mode():
 # ============================================================
 
 if __name__ == "__main__":
-    import sys
+    parser = argparse.ArgumentParser(description="Industrial-grade AI Travel Planning Agent")
+    parser.add_argument("--interactive", action="store_true", help="Run interactive prompt mode")
+    parser.add_argument("--query", type=str, help="Single travel planning query")
+    parser.add_argument("--preferences", type=str, help="Path to JSON preferences file")
+    parser.add_argument("--show-steps", action="store_true", help="Print intermediate tool traces")
+    parser.add_argument("--no-polish", action="store_true", help="Disable premium output polishing")
+    args = parser.parse_args()
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--interactive":
-        interactive_mode()
+    default_query = (
+        "Plan a 5-day trip to Goa, India for 3 friends. "
+        "Budget: INR 50,000 total (moderate). "
+        "Interests: beaches, water sports, nightlife, local cuisine, historical sites. "
+        "Travel dates: December 2025."
+    )
+
+    if args.interactive:
+        interactive_mode(show_steps=args.show_steps, should_polish=not args.no_polish)
     else:
-        run_travel_agent()
+        query = args.query or default_query
+        if args.preferences:
+            query = build_query_from_preferences(args.preferences)
+        run_travel_agent(query, show_steps=args.show_steps, should_polish=not args.no_polish)

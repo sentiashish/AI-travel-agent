@@ -1,4 +1,4 @@
-sample_preferences = {
+{
     "traveler_name": "Team Alpha",
     "destination": "Goa, India",
     "num_travelers": 3,
@@ -6,8 +6,8 @@ sample_preferences = {
     "budget_total_inr": 50000,
     "budget_category": "moderate",
     "travel_dates": {
-        "start": "2025-12-20",
-        "end": "2025-12-24"
+        "start": "2026-12-20",
+        "end": "2026-12-24"
     },
     "interests": [
         "beaches",
@@ -20,11 +20,5 @@ sample_preferences = {
     "dietary_preferences": "no restrictions",
     "accommodation_preference": "budget hotel or hostel",
     "transport_preference": "rent scooters",
-    "special_requirements": "one person has mild motion sickness"
+    "special_requirements": "one traveler has mild motion sickness"
 }
-
-# Save to file
-with open("sample_preferences.json", "w") as f:
-    json.dump(sample_preferences, f, indent=2)
-
-print("✅ Preferences file created: sample_preferences.json")
