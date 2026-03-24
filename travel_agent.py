@@ -774,6 +774,76 @@ def build_query_from_preferences(file_path: str) -> str:
     )
 
 
+def apply_preferences_overrides(
+    base_preferences: Dict[str, Any],
+    overrides: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Apply user-side parameter updates with safe coercion and bounds."""
+    merged = dict(base_preferences or {})
+    merged.update(overrides or {})
+
+    def _safe_int(value: Any, fallback: int, min_value: int, max_value: int) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = fallback
+        return max(min_value, min(max_value, parsed))
+
+    merged["trip_duration_days"] = _safe_int(
+        merged.get("trip_duration_days", 5),
+        fallback=5,
+        min_value=1,
+        max_value=30,
+    )
+    merged["num_travelers"] = _safe_int(
+        merged.get("num_travelers", 2),
+        fallback=2,
+        min_value=1,
+        max_value=50,
+    )
+    merged["budget_total_inr"] = _safe_int(
+        merged.get("budget_total_inr", 30000),
+        fallback=30000,
+        min_value=1000,
+        max_value=10_000_000,
+    )
+
+    destination = str(merged.get("destination", "Goa, India")).strip()
+    merged["destination"] = destination or "Goa, India"
+
+    styles = {"budget", "moderate", "premium"}
+    style = str(merged.get("budget_category", "moderate")).strip().lower()
+    merged["budget_category"] = style if style in styles else "moderate"
+
+    interests = merged.get("interests", [])
+    if isinstance(interests, str):
+        interests = [item.strip() for item in interests.split(",") if item.strip()]
+    if not isinstance(interests, list):
+        interests = []
+    merged["interests"] = [str(item).strip() for item in interests if str(item).strip()]
+
+    dates = merged.get("travel_dates", {})
+    if not isinstance(dates, dict):
+        dates = {}
+    start = str(dates.get("start", "")).strip()
+    end = str(dates.get("end", "")).strip()
+    merged["travel_dates"] = {
+        "start": start,
+        "end": end,
+    }
+
+    for text_key in [
+        "traveler_name",
+        "dietary_preferences",
+        "accommodation_preference",
+        "transport_preference",
+        "special_requirements",
+    ]:
+        merged[text_key] = str(merged.get(text_key, "")).strip()
+
+    return merged
+
+
 # ============================================================
 # SECTION 5: INTERACTIVE MODE
 # ============================================================

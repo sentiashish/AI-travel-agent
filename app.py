@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 
 import streamlit as st
 
-from travel_agent import execute_query
+from travel_agent import apply_preferences_overrides, execute_query
 
 
 SECTION_ORDER = [
@@ -138,12 +138,119 @@ def build_frontend_query(preferences: Dict[str, Any], custom_request: str = "") 
     return structured_context
 
 
+def default_preferences_state() -> Dict[str, Any]:
+    """Return default sidebar preferences for first load."""
+    today = date.today().isoformat()
+    return {
+        "traveler_name": "Team Alpha",
+        "destination": "Goa, India",
+        "num_travelers": 3,
+        "trip_duration_days": 5,
+        "budget_total_inr": 50000,
+        "budget_category": "moderate",
+        "travel_dates": {
+            "start": today,
+            "end": today,
+        },
+        "interests": [
+            "beaches",
+            "water sports",
+            "nightlife",
+            "local cuisine",
+            "historical sites",
+            "photography",
+        ],
+        "dietary_preferences": "no restrictions",
+        "accommodation_preference": "budget hotel or hostel",
+        "transport_preference": "rent scooters",
+        "special_requirements": "one traveler has mild motion sickness",
+    }
+
+
+def init_session_state() -> None:
+    """Initialize planner state for iterative preference updates."""
+    if "active_preferences" not in st.session_state:
+        st.session_state["active_preferences"] = default_preferences_state()
+    if "active_custom_request" not in st.session_state:
+        st.session_state["active_custom_request"] = ""
+    if "last_result" not in st.session_state:
+        st.session_state["last_result"] = None
+    if "last_query" not in st.session_state:
+        st.session_state["last_query"] = ""
+    if "editable_plan_text" not in st.session_state:
+        st.session_state["editable_plan_text"] = ""
+
+
+def render_plan_result(result: Dict[str, Any], show_steps: bool, output_override: str = "") -> None:
+    """Render itinerary output and diagnostics from the latest run."""
+    output = output_override or result.get("output", "No output generated.")
+    if result.get("fallback_mode"):
+        st.warning(
+            "Running in fallback mode (no OpenRouter key). "
+            "Plan is generated from local heuristics and should be verified before booking."
+        )
+
+    sections = ordered_sections(split_markdown_sections(output))
+
+    if len(sections) <= 1:
+        st.markdown("<div class='plan-card section-default'>", unsafe_allow_html=True)
+        st.markdown(output)
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        for title, body in sections:
+            tag, cls = SECTION_META.get(title, (title.upper(), "section-default"))
+            st.markdown(f"<div class='plan-card {cls}'>", unsafe_allow_html=True)
+            st.markdown(f"<p class='section-tag'>{tag}</p>", unsafe_allow_html=True)
+            st.markdown(f"### {title}")
+            st.markdown(body)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    dl_col_1, dl_col_2 = st.columns(2)
+    with dl_col_1:
+        st.download_button(
+            label="Download Plan (.md)",
+            data=output,
+            file_name="travel_plan.md",
+            mime="text/markdown",
+        )
+
+    with dl_col_2:
+        try:
+            pdf_bytes = markdown_to_pdf_bytes(output)
+            st.download_button(
+                label="Download Plan (.pdf)",
+                data=pdf_bytes,
+                file_name="travel_plan.pdf",
+                mime="application/pdf",
+            )
+        except RuntimeError as pdf_exc:
+            st.info(str(pdf_exc))
+
+    if show_steps and "intermediate_steps" in result:
+        with st.expander("Tool trace", expanded=False):
+            for idx, step in enumerate(result["intermediate_steps"], start=1):
+                action, observation = step
+                st.markdown(f"### Step {idx}")
+                st.write(f"Tool: {action.tool}")
+                st.write(f"Input: {action.tool_input}")
+                st.write(str(observation)[:1200])
+
+    with st.expander("Raw response payload", expanded=False):
+        safe = {
+            "output": result.get("output", ""),
+            "raw_output": result.get("raw_output", ""),
+        }
+        st.code(json.dumps(safe, indent=2), language="json")
+
+
 st.set_page_config(
     page_title="Atlas Travel Planner",
     page_icon="AT",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+init_session_state()
 
 st.markdown(
     """
@@ -417,60 +524,107 @@ st.markdown(
 with st.sidebar:
     st.header("Trip Inputs")
 
-    traveler_name = st.text_input("Traveler / Group Name", value="Team Alpha")
+    active_preferences: Dict[str, Any] = st.session_state["active_preferences"]
+    active_dates = active_preferences.get("travel_dates", {})
 
+    try:
+        start_default = date.fromisoformat(active_dates.get("start", date.today().isoformat()))
+    except ValueError:
+        start_default = date.today()
+
+    try:
+        end_default = date.fromisoformat(active_dates.get("end", date.today().isoformat()))
+    except ValueError:
+        end_default = date.today()
+
+    traveler_name = st.text_input(
+        "Traveler / Group Name",
+        value=str(active_preferences.get("traveler_name", "Team Alpha")),
+    )
+
+    quick_destinations = [
+        "Goa, India",
+        "Jaipur, India",
+        "Manali, India",
+        "Kerala, India",
+        "Mumbai, India",
+        "Pune, India",
+        "Custom",
+    ]
+    destination_from_state = str(active_preferences.get("destination", "Goa, India"))
+    quick_default = destination_from_state if destination_from_state in quick_destinations[:-1] else "Custom"
     quick_destination = st.selectbox(
         "Quick destination",
-        [
-            "Goa, India",
-            "Jaipur, India",
-            "Manali, India",
-            "Kerala, India",
-            "Mumbai, India",
-            "Pune, India",
-            "Custom",
-        ],
-        index=0,
+        quick_destinations,
+        index=quick_destinations.index(quick_default),
     )
 
     if quick_destination == "Custom":
-        destination = st.text_input("Destination", value="Goa, India")
+        destination = st.text_input("Destination", value=destination_from_state)
     else:
         destination = st.text_input("Destination", value=quick_destination)
 
-    days = st.slider("Trip duration (days)", min_value=1, max_value=14, value=5)
-    travelers = st.number_input("Travelers", min_value=1, max_value=20, value=3, step=1)
-    budget = st.number_input("Total budget (INR)", min_value=1000, value=50000, step=1000)
+    days = st.slider(
+        "Trip duration (days)",
+        min_value=1,
+        max_value=14,
+        value=int(active_preferences.get("trip_duration_days", 5)),
+    )
+    travelers = st.number_input(
+        "Travelers",
+        min_value=1,
+        max_value=20,
+        value=int(active_preferences.get("num_travelers", 3)),
+        step=1,
+    )
+    budget = st.number_input(
+        "Total budget (INR)",
+        min_value=1000,
+        value=int(active_preferences.get("budget_total_inr", 50000)),
+        step=1000,
+    )
 
     col_date_1, col_date_2 = st.columns(2)
     with col_date_1:
-        start_date = st.date_input("Start", value=date.today())
+        start_date = st.date_input("Start", value=start_default)
     with col_date_2:
-        end_date = st.date_input("End", value=date.today())
+        end_date = st.date_input("End", value=end_default)
 
     interests = st.text_area(
         "Interests",
-        value="beaches, water sports, nightlife, local cuisine, historical sites, photography",
+        value=", ".join(active_preferences.get("interests", [])),
         height=90,
     )
 
     style = st.selectbox(
         "Travel style",
         ["moderate", "budget", "premium"],
-        index=0,
+        index=["moderate", "budget", "premium"].index(
+            str(active_preferences.get("budget_category", "moderate"))
+            if str(active_preferences.get("budget_category", "moderate")) in ["moderate", "budget", "premium"]
+            else "moderate"
+        ),
     )
 
-    dietary_preferences = st.text_input("Dietary preferences", value="no restrictions")
-    accommodation_preference = st.text_input(
-        "Accommodation preference", value="budget hotel or hostel"
+    dietary_preferences = st.text_input(
+        "Dietary preferences",
+        value=str(active_preferences.get("dietary_preferences", "no restrictions")),
     )
-    transport_preference = st.text_input("Transport preference", value="rent scooters")
+    accommodation_preference = st.text_input(
+        "Accommodation preference",
+        value=str(active_preferences.get("accommodation_preference", "budget hotel or hostel")),
+    )
+    transport_preference = st.text_input(
+        "Transport preference",
+        value=str(active_preferences.get("transport_preference", "rent scooters")),
+    )
     special_requirements = st.text_input(
-        "Special requirements", value="one traveler has mild motion sickness"
+        "Special requirements",
+        value=str(active_preferences.get("special_requirements", "one traveler has mild motion sickness")),
     )
     custom_user_request = st.text_area(
         "Custom request (optional)",
-        value="",
+        value=st.session_state.get("active_custom_request", ""),
         height=80,
         placeholder="Example: Plan for late starts, two beach sunsets, and one premium dinner.",
     )
@@ -499,6 +653,20 @@ with st.sidebar:
         "special_requirements": special_requirements,
     }
 
+    validated_preferences = apply_preferences_overrides(active_preferences, preferences_payload)
+
+    if st.button("Apply Parameter Changes", use_container_width=True):
+        st.session_state["active_preferences"] = validated_preferences
+        st.session_state["active_custom_request"] = custom_user_request
+        st.success("Parameters updated. Click Regenerate Travel Plan to refresh itinerary.")
+
+    has_preference_changes = (
+        validated_preferences != active_preferences
+        or custom_user_request != st.session_state.get("active_custom_request", "")
+    )
+    if has_preference_changes:
+        st.info("Preferences changed. Click regenerate to update itinerary.")
+
     st.download_button(
         label="Download Preferences (.json)",
         data=json.dumps(preferences_payload, indent=2),
@@ -507,7 +675,7 @@ with st.sidebar:
     )
 
 
-query = build_frontend_query(preferences_payload, custom_user_request)
+query = build_frontend_query(validated_preferences, custom_user_request)
 
 kpi_cols = st.columns(4)
 with kpi_cols[0]:
@@ -537,74 +705,55 @@ with st.expander("Preview generated prompt", expanded=False):
 with st.expander("Preview preferences JSON", expanded=False):
     st.code(json.dumps(preferences_payload, indent=2), language="json")
 
-if st.button("Generate Travel Plan"):
+run_label = "Regenerate Travel Plan" if st.session_state.get("last_result") else "Generate Travel Plan"
+
+if st.button(run_label):
     with st.spinner("Running research and building your itinerary..."):
         try:
+            st.session_state["active_preferences"] = validated_preferences
+            st.session_state["active_custom_request"] = custom_user_request
             result = execute_query(
                 query=query,
                 verbose=show_steps,
                 show_steps=show_steps,
                 should_polish=not disable_polish,
             )
-
-            output = result.get("output", "No output generated.")
-            if result.get("fallback_mode"):
-                st.warning(
-                    "Running in fallback mode (no OpenRouter key). "
-                    "Plan is generated from local heuristics and should be verified before booking."
-                )
-            sections = ordered_sections(split_markdown_sections(output))
-
-            if len(sections) <= 1:
-                st.markdown("<div class='plan-card section-default'>", unsafe_allow_html=True)
-                st.markdown(output)
-                st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                for title, body in sections:
-                    tag, cls = SECTION_META.get(title, (title.upper(), "section-default"))
-                    st.markdown(f"<div class='plan-card {cls}'>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='section-tag'>{tag}</p>", unsafe_allow_html=True)
-                    st.markdown(f"### {title}")
-                    st.markdown(body)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-            dl_col_1, dl_col_2 = st.columns(2)
-            with dl_col_1:
-                st.download_button(
-                    label="Download Plan (.md)",
-                    data=output,
-                    file_name="travel_plan.md",
-                    mime="text/markdown",
-                )
-
-            with dl_col_2:
-                try:
-                    pdf_bytes = markdown_to_pdf_bytes(output)
-                    st.download_button(
-                        label="Download Plan (.pdf)",
-                        data=pdf_bytes,
-                        file_name="travel_plan.pdf",
-                        mime="application/pdf",
-                    )
-                except RuntimeError as pdf_exc:
-                    st.info(str(pdf_exc))
-
-            if show_steps and "intermediate_steps" in result:
-                with st.expander("Tool trace", expanded=False):
-                    for idx, step in enumerate(result["intermediate_steps"], start=1):
-                        action, observation = step
-                        st.markdown(f"### Step {idx}")
-                        st.write(f"Tool: {action.tool}")
-                        st.write(f"Input: {action.tool_input}")
-                        st.write(str(observation)[:1200])
-
-            with st.expander("Raw response payload", expanded=False):
-                safe = {
-                    "output": result.get("output", ""),
-                    "raw_output": result.get("raw_output", ""),
-                }
-                st.code(json.dumps(safe, indent=2), language="json")
+            st.session_state["last_result"] = result
+            st.session_state["last_query"] = query
+            st.session_state["editable_plan_text"] = result.get("output", "")
 
         except Exception as exc:
             st.error(f"Error: {exc}")
             st.info("Set OPENROUTER_API_KEY in .env or environment before running.")
+
+if st.session_state.get("last_result"):
+    if has_preference_changes:
+        st.info("Showing previous plan. Regenerate to apply your new preferences.")
+
+    st.markdown("### Edit Itinerary")
+    st.caption("You can modify the generated itinerary below. Preview and downloads use your edited version.")
+
+    current_output = st.session_state["last_result"].get("output", "")
+    if not st.session_state.get("editable_plan_text"):
+        st.session_state["editable_plan_text"] = current_output
+
+    st.text_area(
+        "Customize your itinerary",
+        key="editable_plan_text",
+        height=320,
+    )
+
+    col_reset, col_status = st.columns([1, 2])
+    with col_reset:
+        if st.button("Reset To AI Version"):
+            st.session_state["editable_plan_text"] = current_output
+            st.rerun()
+    with col_status:
+        if st.session_state.get("editable_plan_text", "").strip() != current_output.strip():
+            st.success("Using edited itinerary version.")
+
+    render_plan_result(
+        st.session_state["last_result"],
+        show_steps,
+        output_override=st.session_state.get("editable_plan_text", ""),
+    )
