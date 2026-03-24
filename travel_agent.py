@@ -5,7 +5,7 @@ import datetime
 import re
 from pathlib import Path
 from typing import Any, Dict
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from langchain_community.chat_models import ChatOpenAI
 from langchain.agents import create_react_agent
 from langchain.agents.agent import AgentExecutor
@@ -17,9 +17,25 @@ from langchain_community.tools import DuckDuckGoSearchRun
 BASE_DIR = Path(__file__).resolve().parent
 RUN_HISTORY_FILE = BASE_DIR / "agent_run_history.jsonl"
 
+def load_environment() -> None:
+    """Load environment variables from common project locations."""
+    candidate_files = [
+        BASE_DIR / ".env",
+        BASE_DIR.parent / ".env",
+    ]
+
+    for env_file in candidate_files:
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+
+    discovered = find_dotenv(usecwd=True)
+    if discovered:
+        load_dotenv(discovered, override=False)
+
+
 # If using OpenRouter (free API)
 # Set your API key in .env file or directly in environment variables.
-load_dotenv(BASE_DIR / ".env")
+load_environment()
 
 OUTPUT_POLISH_PROMPT = """You are a senior travel consultant editor.
 Rewrite the draft travel plan into a polished, human-quality, professional deliverable.
@@ -256,12 +272,26 @@ def setup_llm() -> ChatOpenAI:
             "Missing OPENROUTER_API_KEY. Add it to your environment or .env file."
         )
 
+    placeholder_markers = [
+        "PASTE_YOUR",
+        "YOUR_REAL_KEY",
+        "YOUR_REAL_OPENROUTER_KEY",
+        "your_openrouter_api_key_here",
+    ]
+    if any(marker.lower() in api_key.lower() for marker in placeholder_markers):
+        raise RuntimeError(
+            "Invalid OPENROUTER_API_KEY value (placeholder detected). "
+            "Set your real OpenRouter key, e.g. starts with 'sk-or-v1-...'."
+        )
+
     llm = ChatOpenAI(
         model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-8b-instruct"),
         openai_api_key=api_key,
         openai_api_base="https://openrouter.ai/api/v1",
         temperature=float(os.getenv("TRAVEL_AGENT_TEMPERATURE", "0.3")),
-        max_tokens=int(os.getenv("TRAVEL_AGENT_MAX_TOKENS", "1800"))
+        max_tokens=int(os.getenv("TRAVEL_AGENT_MAX_TOKENS", "1800")),
+        request_timeout=float(os.getenv("TRAVEL_AGENT_REQUEST_TIMEOUT_SEC", "15")),
+        max_retries=int(os.getenv("TRAVEL_AGENT_MAX_RETRIES", "1")),
     )
     return llm
 
@@ -574,6 +604,7 @@ def create_travel_agent(verbose: bool = False, return_steps: bool = False) -> Ag
         verbose=verbose,
         handle_parsing_errors=True,
         max_iterations=int(os.getenv("TRAVEL_AGENT_MAX_ITERATIONS", "8")),
+        max_execution_time=float(os.getenv("TRAVEL_AGENT_MAX_EXECUTION_SEC", "20")),
         return_intermediate_steps=return_steps
     )
 
@@ -609,6 +640,56 @@ def execute_query(
             return result
         raise
     except Exception as exc:
+        error_text = str(exc).lower()
+        auth_markers = [
+            "authenticationerror",
+            "missing authentication header",
+            "invalid api key",
+            "user not found",
+            "401",
+            "402",
+            "insufficient credits",
+            "never purchased credits",
+            "payment required",
+        ]
+        connection_markers = [
+            "connection error",
+            "apiconnectionerror",
+            "timed out",
+            "temporarily unavailable",
+            "503",
+            "502",
+            "504",
+        ]
+
+        if any(marker in error_text for marker in auth_markers):
+            reason = (
+                "OpenRouter authorization or billing failed. "
+                "Set a valid OPENROUTER_API_KEY and ensure account credits are available."
+            )
+            fallback = normalize_output_layout(build_offline_fallback_plan(query, reason))
+            result = {
+                "output": fallback,
+                "raw_output": fallback,
+                "fallback_mode": True,
+            }
+            persist_run_log(query, result, show_steps, should_polish, error=str(exc))
+            return result
+
+        if any(marker in error_text for marker in connection_markers):
+            reason = (
+                "OpenRouter connection failed. "
+                "Check internet/network and retry; fallback mode used for continuity."
+            )
+            fallback = normalize_output_layout(build_offline_fallback_plan(query, reason))
+            result = {
+                "output": fallback,
+                "raw_output": fallback,
+                "fallback_mode": True,
+            }
+            persist_run_log(query, result, show_steps, should_polish, error=str(exc))
+            return result
+
         persist_run_log(
             query,
             {"output": "", "raw_output": "", "fallback_mode": False},

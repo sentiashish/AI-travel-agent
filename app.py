@@ -1,6 +1,7 @@
 import json
+import re
 from datetime import date
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import streamlit as st
 
@@ -64,6 +65,79 @@ def ordered_sections(sections: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
+def markdown_to_pdf_bytes(markdown_text: str) -> bytes:
+    """Convert markdown text into a simple, portable PDF byte stream."""
+    try:
+        from fpdf import FPDF
+    except Exception as exc:
+        raise RuntimeError(
+            "PDF export requires 'fpdf2'. Install it with: pip install fpdf2"
+        ) from exc
+
+    # Convert markdown to a readable plain-text layout for PDF export.
+    text = markdown_text or ""
+    text = re.sub(r"^###\s+", "\n", text, flags=re.MULTILINE)
+    text = re.sub(r"^##\s+", "\n", text, flags=re.MULTILINE)
+    text = re.sub(r"^#\s+", "\n", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    text = re.sub(r"`(.*?)`", r"\1", text)
+    text = text.replace("- [ ]", "- ")
+
+    # Keep PDF generation robust with core font encodings.
+    safe_text = text.encode("latin-1", errors="replace").decode("latin-1")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 6, safe_text)
+
+    raw = pdf.output(dest="S")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    return raw.encode("latin-1", errors="replace")
+
+
+def build_frontend_query(preferences: Dict[str, Any], custom_request: str = "") -> str:
+    """Build a rich planning query from UI fields with optional user freeform text."""
+    destination = preferences.get("destination", "Unknown destination")
+    days = preferences.get("trip_duration_days", 1)
+    travelers = preferences.get("num_travelers", 1)
+    budget = preferences.get("budget_total_inr", 30000)
+    style = preferences.get("budget_category", "moderate")
+    interests = ", ".join(preferences.get("interests", [])) or "general sightseeing"
+    dates = preferences.get("travel_dates", {})
+    start = dates.get("start", "")
+    end = dates.get("end", "")
+    dietary = preferences.get("dietary_preferences", "no restrictions")
+    accommodation = preferences.get("accommodation_preference", "mid-range stay")
+    transport = preferences.get("transport_preference", "local transport")
+    special = preferences.get("special_requirements", "none")
+
+    structured_context = (
+        f"Plan a {days}-day trip to {destination} for {travelers} travelers. "
+        f"Total budget is INR {int(budget)} ({style}). "
+        f"Interests: {interests}. "
+        f"Travel window: from {start} to {end}. "
+        f"Dietary preferences: {dietary}. "
+        f"Accommodation preference: {accommodation}. "
+        f"Transport preference: {transport}. "
+        f"Special requirements: {special}. "
+        "Provide a day-by-day itinerary, budget split, food recommendations, "
+        "local transport guidance, and safety tips."
+    )
+
+    user_intent = (custom_request or "").strip()
+    if user_intent:
+        return (
+            f"User custom request: {user_intent}\n\n"
+            f"Trip context to respect:\n{structured_context}"
+        )
+
+    return structured_context
+
+
 st.set_page_config(
     page_title="Atlas Travel Planner",
     page_icon="AT",
@@ -106,11 +180,47 @@ st.markdown(
         border: 0 !important;
     }
 
+    [data-testid="collapsedControl"] {
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 10000 !important;
+    }
+
+    [data-testid="collapsedControl"] button {
+        background: #0f7ea3 !important;
+        color: #ffffff !important;
+        border: 1px solid #0b5f7f !important;
+        border-radius: 999px !important;
+        width: 42px !important;
+        height: 42px !important;
+        box-shadow: 0 6px 16px rgba(6, 73, 102, 0.28) !important;
+    }
+
+    [data-testid="collapsedControl"] button:hover {
+        background: #0c6d8e !important;
+    }
+
+    [data-testid="collapsedControl"]::after {
+        content: "OPEN MENU";
+        display: inline-block;
+        margin-left: 8px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        background: #0f7ea3;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        border: 1px solid #0b5f7f;
+        box-shadow: 0 6px 16px rgba(6, 73, 102, 0.20);
+        vertical-align: middle;
+    }
+
     [data-testid="stDecoration"] {
         display: none !important;
     }
 
-    [data-testid="stToolbar"],
     [data-testid="stAppDeployButton"],
     [data-testid="stStatusWidget"] {
         display: none !important;
@@ -307,7 +417,27 @@ st.markdown(
 with st.sidebar:
     st.header("Trip Inputs")
 
-    destination = st.text_input("Destination", value="Goa, India")
+    traveler_name = st.text_input("Traveler / Group Name", value="Team Alpha")
+
+    quick_destination = st.selectbox(
+        "Quick destination",
+        [
+            "Goa, India",
+            "Jaipur, India",
+            "Manali, India",
+            "Kerala, India",
+            "Mumbai, India",
+            "Pune, India",
+            "Custom",
+        ],
+        index=0,
+    )
+
+    if quick_destination == "Custom":
+        destination = st.text_input("Destination", value="Goa, India")
+    else:
+        destination = st.text_input("Destination", value=quick_destination)
+
     days = st.slider("Trip duration (days)", min_value=1, max_value=14, value=5)
     travelers = st.number_input("Travelers", min_value=1, max_value=20, value=3, step=1)
     budget = st.number_input("Total budget (INR)", min_value=1000, value=50000, step=1000)
@@ -330,20 +460,54 @@ with st.sidebar:
         index=0,
     )
 
+    dietary_preferences = st.text_input("Dietary preferences", value="no restrictions")
+    accommodation_preference = st.text_input(
+        "Accommodation preference", value="budget hotel or hostel"
+    )
+    transport_preference = st.text_input("Transport preference", value="rent scooters")
+    special_requirements = st.text_input(
+        "Special requirements", value="one traveler has mild motion sickness"
+    )
+    custom_user_request = st.text_area(
+        "Custom request (optional)",
+        value="",
+        height=80,
+        placeholder="Example: Plan for late starts, two beach sunsets, and one premium dinner.",
+    )
+
     show_steps = st.toggle("Show tool steps", value=False)
     disable_polish = st.toggle("Disable premium polish", value=False)
 
     st.caption("Note: OPENROUTER_API_KEY must be set in .env or environment.")
 
+    interests_list = [i.strip() for i in interests.split(",") if i.strip()]
+    preferences_payload: Dict[str, Any] = {
+        "traveler_name": traveler_name,
+        "destination": destination,
+        "num_travelers": int(travelers),
+        "trip_duration_days": int(days),
+        "budget_total_inr": int(budget),
+        "budget_category": style,
+        "travel_dates": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+        },
+        "interests": interests_list,
+        "dietary_preferences": dietary_preferences,
+        "accommodation_preference": accommodation_preference,
+        "transport_preference": transport_preference,
+        "special_requirements": special_requirements,
+    }
 
-query = (
-    f"Plan a {days}-day trip to {destination} for {travelers} travelers. "
-    f"Total budget is INR {int(budget)} ({style}). "
-    f"Interests: {interests}. "
-    f"Travel window: from {start_date.isoformat()} to {end_date.isoformat()}. "
-    "Provide a day-by-day itinerary, budget split, food recommendations, "
-    "local transport guidance, and safety tips."
-)
+    st.download_button(
+        label="Download Preferences (.json)",
+        data=json.dumps(preferences_payload, indent=2),
+        file_name="sample_preferences.json",
+        mime="application/json",
+    )
+
+
+query = build_frontend_query(preferences_payload, custom_user_request)
 
 kpi_cols = st.columns(4)
 with kpi_cols[0]:
@@ -369,6 +533,9 @@ with kpi_cols[3]:
 
 with st.expander("Preview generated prompt", expanded=False):
     st.code(query, language="text")
+
+with st.expander("Preview preferences JSON", expanded=False):
+    st.code(json.dumps(preferences_payload, indent=2), language="json")
 
 if st.button("Generate Travel Plan"):
     with st.spinner("Running research and building your itinerary..."):
@@ -401,12 +568,26 @@ if st.button("Generate Travel Plan"):
                     st.markdown(body)
                     st.markdown("</div>", unsafe_allow_html=True)
 
-            st.download_button(
-                label="Download Plan (.md)",
-                data=output,
-                file_name="travel_plan.md",
-                mime="text/markdown",
-            )
+            dl_col_1, dl_col_2 = st.columns(2)
+            with dl_col_1:
+                st.download_button(
+                    label="Download Plan (.md)",
+                    data=output,
+                    file_name="travel_plan.md",
+                    mime="text/markdown",
+                )
+
+            with dl_col_2:
+                try:
+                    pdf_bytes = markdown_to_pdf_bytes(output)
+                    st.download_button(
+                        label="Download Plan (.pdf)",
+                        data=pdf_bytes,
+                        file_name="travel_plan.pdf",
+                        mime="application/pdf",
+                    )
+                except RuntimeError as pdf_exc:
+                    st.info(str(pdf_exc))
 
             if show_steps and "intermediate_steps" in result:
                 with st.expander("Tool trace", expanded=False):

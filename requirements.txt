@@ -6,3 +6,4 @@ ddgs>=9.11.4
 python-dotenv>=1.0.1
 openai>=1.75.0
 streamlit>=1.44.0
+fpdf2>=2.7.9
