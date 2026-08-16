@@ -22,6 +22,7 @@ will generate an offline fallback plan instead of using the live AI agent.
 
 5. Deploy. Streamlit installs `requirements.txt` automatically.
 
+
 ## Render or Railway
 
 Use these settings:
@@ -29,6 +30,7 @@ Use these settings:
 - Build command: `pip install -r requirements.txt`
 - Start command: `streamlit run app.py --server.address 0.0.0.0 --server.port $PORT`
 - Environment variable: `OPENROUTER_API_KEY`
+
 
 ## Before publishing
 
