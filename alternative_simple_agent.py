@@ -7,6 +7,13 @@ and manual orchestration to demonstrate agent concepts.
 from langchain_community.tools import DuckDuckGoSearchRun
 import json
 import datetime
+import sys
+
+
+# Windows PowerShell can default to a legacy console encoding (such as cp1252).
+# This demo prints emojis, so use UTF-8 when the active Python runtime supports it.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 class SimpleTravelAgent:

@@ -1,4 +1,4 @@
-cd "c:\Users\ASHISH KUMAR\OneDrive\Documents\Desktop\KJSCE\kj stuff\TY Full Syllabus\AI Lab CA-1\ai-ia-sem6"
+cd "C:\Users\ASHISH KUMAR\Desktop\AI\AI-travel-agent"
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -6,8 +6,9 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
-# Required for travel_agent.py and app.py
-$env:OPENROUTER_API_KEY="your_openrouter_api_key_here"
+# Required for live AI results in travel_agent.py and app.py.
+# Replace this with your real key; do not commit it to GitHub.
+$env:OPENROUTER_API_KEY="sk-or-v1-your-real-key"
 
 # Frontend (recommended)
 python -m streamlit run app.py
@@ -21,5 +22,5 @@ python travel_agent.py --preferences sample_preferences.json
 # Interactive CLI mode
 python travel_agent.py --interactive
 
-# Simple demo agent (no OpenRouter key required)
+# Simple demo agent (no OpenRouter key required; it still uses internet search)
 python alternative_simple_agent.py

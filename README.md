@@ -1,152 +1,136 @@
-# AI Travel Planning Agent (SEM 6)
+# AI Travel Planning Agent
 
-This project includes:
-- A Streamlit web app UI
-- A LangChain ReAct travel agent with tools (search, budget, itinerary, file reader)
-- A simple fallback agent implementation for demonstration
+A Streamlit travel-planning application built with LangChain. It creates
+day-by-day travel plans, budget estimates, practical travel notes, and
+downloadable Markdown/PDF plans.
 
-## Project Files
+The project has two modes:
 
-- `app.py`: Streamlit frontend
-- `travel_agent.py`: Main LangChain + OpenRouter agent (CLI + logic)
-- `alternative_simple_agent.py`: Simpler non-LLM orchestration demo
-- `sample_preferences.json`: Example structured input file
-- `requirements.txt`: Python dependencies
-- `agent_run_history.jsonl`: Persistent run history (auto-created)
-- `architecture_diagram.md`: Mermaid architecture diagram
-- `tool_flow_diagram.md`: Mermaid tool flow diagram
-- `experiments_template.md`: Report analysis template
-- `PRODUCTION_CHECKLIST.md`: Production readiness checklist
+- **Main agent** (`app.py` / `travel_agent.py`): uses OpenRouter and
+  DuckDuckGo search for live AI-assisted responses. If its key is missing or
+  unavailable, it automatically returns a clearly labelled local fallback plan.
+- **Simple demo** (`alternative_simple_agent.py`): demonstrates the search,
+  budget, and itinerary workflow without an LLM API key. It still requires an
+  internet connection for DuckDuckGo search.
 
-## Prerequisites
+## Repository files
 
-- Windows PowerShell
-- Python 3.10+ (recommended 3.11)
-- Internet connection
-- OpenRouter API key (required for `travel_agent.py` and `app.py`)
+- `app.py` — Streamlit web interface
+- `travel_agent.py` — LangChain agent, tools, fallback planning, and CLI
+- `alternative_simple_agent.py` — simple agent demonstration
+- `sample_preferences.json` — sample structured trip preferences
+- `requirements.txt` — Python dependencies
+- `.env.example` — safe environment-variable template
+- `DEPLOYMENT.md` — hosting instructions
 
-## Step-by-Step Setup (Windows)
+## Requirements
 
-1. Open PowerShell and go to this folder:
+- Python 3.10 or later (Python 3.11 recommended)
+- Internet connection for live search and OpenRouter
+- An OpenRouter API key for live AI results
 
-```powershell
-cd "c:\Users\ASHISH KUMAR\OneDrive\Documents\Desktop\KJSCE\kj stuff\TY Full Syllabus\AI Lab CA-1\ai-ia-sem6"
-```
+## Local setup on Windows PowerShell
 
-2. Create a virtual environment:
+Open PowerShell and run these commands exactly from the project folder:
 
 ```powershell
+cd "C:\Users\ASHISH KUMAR\Desktop\AI\AI-travel-agent"
 python -m venv .venv
-```
-
-3. Activate the environment:
-
-```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
-```
-
-4. Install dependencies:
-
-```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-5. Set OpenRouter API key (current terminal session):
+Your prompt should begin with `(.venv)`. Activating the environment does not
+change directories, so keep the terminal in `AI-travel-agent` before running
+`app.py`, `travel_agent.py`, or `alternative_simple_agent.py`.
+
+## Configure OpenRouter
+
+For the current PowerShell session:
 
 ```powershell
-$env:OPENROUTER_API_KEY="your_openrouter_api_key_here"
+$env:OPENROUTER_API_KEY="sk-or-v1-your-real-key"
 ```
 
-Optional model override:
+Alternatively, copy `.env.example` to `.env`, replace the placeholder value,
+and keep `.env` private. It is ignored by Git.
 
 ```powershell
-$env:OPENROUTER_MODEL="meta-llama/llama-3-8b-instruct"
+Copy-Item .env.example .env
 ```
 
-## Run Options
+## Run the application
 
-### 1) Streamlit UI (Recommended)
+### Streamlit web UI
 
 ```powershell
 python -m streamlit run app.py
 ```
 
-Then open the local URL shown in terminal.
+Open the URL shown in the terminal, normally `http://localhost:8501`. Stop the
+server with `Ctrl+C`.
 
-### 2) One-shot CLI Query
+### One-time CLI query
 
 ```powershell
-python travel_agent.py --query "Plan a 5-day trip to Goa for 3 friends under INR 50000"
+python travel_agent.py --query "Plan a 5-day trip to Goa for 3 people under INR 50000"
 ```
 
-### 3) CLI with JSON Preferences
+### Preferences JSON
 
 ```powershell
 python travel_agent.py --preferences sample_preferences.json
 ```
 
-### 4) Interactive CLI Mode
+### Interactive CLI
 
 ```powershell
 python travel_agent.py --interactive
 ```
 
-### 5) Simple Agent Demo (No OpenRouter Key Needed)
+Useful flags: `--show-steps` prints tool traces; `--no-polish` skips the
+final AI editing pass.
+
+### Simple demo agent
 
 ```powershell
 python alternative_simple_agent.py
 ```
 
-## Useful Flags (Main Agent)
-
-- `--show-steps`: print intermediate tool trace
-- `--no-polish`: disable final polishing step
-
-Example:
-
-```powershell
-python travel_agent.py --query "Plan a 3-day Jaipur trip" --show-steps --no-polish
-```
-
-## Observability and Logs
-
-- Every run is appended to `agent_run_history.jsonl` with:
-	- timestamp
-	- query
-	- fallback mode status
-	- output preview
-	- optional tool traces (when `--show-steps` is enabled)
-
-- Simple agent traces are exported to:
-	- `agent_reasoning_log.json`
+This demo now configures UTF-8 console output itself, so it works in standard
+Windows PowerShell without setting `PYTHONUTF8` manually.
 
 ## Troubleshooting
 
-### Missing OPENROUTER_API_KEY
+**`can't open file ... travel_agent.py`** — you are in the wrong folder.
+Run `cd "C:\Users\ASHISH KUMAR\Desktop\AI\AI-travel-agent"` first.
 
-If you see:
-`Missing OPENROUTER_API_KEY. Add it to your environment or .env file.`
+**`streamlit` or `langchain` is not found** — activate `.venv`, then run
+`python -m pip install -r requirements.txt`.
 
-Set the key in PowerShell:
+**Missing or invalid `OPENROUTER_API_KEY`** — add a real key to `.env` or the
+current PowerShell session. The main application uses its fallback planner if
+the key cannot be used.
 
-```powershell
-$env:OPENROUTER_API_KEY="your_openrouter_api_key_here"
-```
+**Search fails** — check your internet connection or try again later; the
+search provider may temporarily rate-limit requests.
 
-### Import errors (langchain/streamlit not found)
+## Deployment
 
-Make sure the venv is active and reinstall:
+Yes, the Streamlit UI can be deployed. See [DEPLOYMENT.md](DEPLOYMENT.md) for
+Streamlit Community Cloud, Render, and Railway settings. Add
+`OPENROUTER_API_KEY` through the platform's secret manager, never in Git.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-### Preferences file not found
-
-Use path relative to this repo or full absolute path:
+## Before pushing to GitHub
 
 ```powershell
-python travel_agent.py --preferences sample_preferences.json
+git status
+git add app.py travel_agent.py alternative_simple_agent.py README.md run.txt .gitignore .env.example DEPLOYMENT.md requirements.txt sample_preferences.json
+git commit -m "Prepare travel agent for deployment"
+git push
 ```
+
+Check `git status` before committing and do not stage `.env`, virtual
+environments, generated logs, or files containing real API keys.

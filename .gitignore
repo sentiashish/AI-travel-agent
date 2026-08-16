@@ -13,3 +13,6 @@ __pycache__/
 
 # Local logs / outputs
 agent_reasoning_log.json
+agent_run_history.jsonl
+streamlit.stdout.log
+streamlit.stderr.log
