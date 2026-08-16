@@ -2,11 +2,9 @@ import json
 import re
 from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
-
 import streamlit as st
 
 from travel_agent import apply_preferences_overrides, execute_query
-
 
 SECTION_ORDER = [
     "Trip Snapshot",
@@ -17,7 +15,6 @@ SECTION_ORDER = [
     "Safety and Practical Tips",
     "Quick Booking Checklist",
 ]
-
 SECTION_META: Dict[str, Tuple[str, str]] = {
     "Trip Snapshot": ("TRIP SNAPSHOT", "section-hero"),
     "Day-by-Day Itinerary": ("DAY-WISE ITINERARY", "section-default"),
