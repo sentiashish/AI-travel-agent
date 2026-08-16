@@ -13,6 +13,7 @@ The project has two modes:
   budget, and itinerary workflow without an LLM API key. It still requires an
   internet connection for DuckDuckGo search.
 
+
 ## Repository files
 
 - `app.py` — Streamlit web interface
@@ -22,6 +23,7 @@ The project has two modes:
 - `requirements.txt` — Python dependencies
 - `.env.example` — safe environment-variable template
 - `DEPLOYMENT.md` — hosting instructions
+
 
 ## Requirements
 
@@ -34,6 +36,7 @@ The project has two modes:
 Open PowerShell and run these commands exactly from the project folder:
 
 ```powershell
+
 cd "C:\Users\ASHISH KUMAR\Desktop\AI\AI-travel-agent"
 python -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
