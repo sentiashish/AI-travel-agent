@@ -16,3 +16,7 @@ agent_reasoning_log.json
 agent_run_history.jsonl
 streamlit.stdout.log
 streamlit.stderr.log
+
+# Generated travel-plan exports
+travel_plan.md
+travel_plan.pdf
